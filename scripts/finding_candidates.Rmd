@@ -1,0 +1,25 @@
+---
+title: "Identifying Candidate Lethal Mutations from Whole-Genome Data"
+author: "Nathan Kinsey"
+date: "10/6/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+library(tidyverse)
+```
+
+We correct for multiple testing using the Benjamini and Hochberg method.
+
+```{r}
+
+top_variants <- read_csv("../Data/top_variants_high.csv") %>% 
+    add_row(read_csv("../Data/top_variants_low.csv")) %>% 
+    mutate(`HWE P` = p.adjust(top_variants$`HWE P`, method = "BH"))
+plotable <- transmute(top_variants, BP = SNP, CHR = CHR, P = `HWE P`, SNP = SNP)
+
+library(qqman)
+manhattan(plotable)
+```
