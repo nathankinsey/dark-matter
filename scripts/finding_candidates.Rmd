@@ -11,9 +11,53 @@ knitr::opts_chunk$set(echo = FALSE)
 library(tidyverse)
 ```
 
+# Data source and attribution
+
+The data used for this analysis comes from the Dog Biomedical Variant Database Consortium (DBVDC). This repository of whole genome sequenced data comes from over 120 different dog breeds, including some wolves. The variety of genomic data in the dataset is further described in [a study by Jagannathan et. al. in 2019](https://doi.org/10.1111/age.12834). As of writing, there are 648 samples deposited for analysis. **TODO: I think Liza said there was an updated version with more samples. Consider rerunning when we get access. Also, I should find out the date of when we accessed the database and report it.** The file is stored in the conventional variant call format (VCF).
+
+# Sweeping the whole genome for missing homozygosity
+
+## Data cleaning and preprocessing
+
+The compressed VCF altogether is around 150GB and it was computationally prohibitive to run statistical software on the entire file. As a result, the file was divided by chromosome and software was run on a per-chromosome basis. This should have no affect on the downstream processing, as all quality control (QC) checks are done per variant. This was done under the assumption that all samples in the database are of high enough quality to consider. **TODO: Verify that assumption. Check with others to see if there is a minimum amount of coverage that we should allow or if there are other reasons to discard entire samples.**
+
+```{bash eval=FALSE}
+# Extract each chromosome from the main file. Chromosome 1 is shown as an example
+vcftools --gzvcf dogs.648.vars.ann.vcf.gz --chr 1 --recode --stdout > Dogs648_1.vcf
+# Get frequency counts and Hardy-Weinberg test statistics
+plink --vcf Dogs648_1.vcf --dog --const-fid --allow-extra-chr --set-missing-var-ids @:# --geno 0.1 --maf 0.05 --hardy --freqx --out consortia_1
+```
+
+Plink was run on all of the chromosomal genetic data in the file to determine genotype frequency counts as well as Hardy-Weinberg equilibrium (HWE) exact test statistics. QC parameters discarded variants with higher than 10% missing call rates. Variants with a minor allele frequency of %5 or less were also discarded, as they were deemed too rare to prove insightful for this study.
+
+While the HWE test statisitcs highlight exceedingly unbalanced ratios of homozygosity and heterozygosity, they do not differentiate between cases in which the equilibrium is violated based on too many heterozygotes or homozygotes. As such, variants with minor alleles that have more than 2 homozygous cases in the dataset were discarded. This means that all remaining variants with low HWE p-values must have unusually high heterozygosity and missing homozygosity. Such variants would imply recessive lethality.
+
+```{r cleaning}
+genoData <- tibble()
+for (datafile in Sys.glob("../data/*.hwe")) {
+    # Load in the data, one chromosome at a time, and filter out variants with more than 2 homozygous cases for both alleles
+    hardy <- read_table2(datafile,
+    col_types = cols_only(GENO = col_character(), P = col_double(),
+                          SNP = col_character())) %>% 
+        separate(GENO, sep = "/", into = c("HOM_A1", "HET", "HOM_A2"), convert = TRUE) %>% 
+        filter(HOM_A1 <= 2 | HOM_A2 <= 2) %>%
+        separate(SNP, sep = ":", into = c("CHR", "BP"), convert = TRUE, remove = FALSE)
+
+    genoData <- bind_rows(genoData, hardy)
+    rm(hardy)
+}
+
+write_csv(genoData, "../data/genoData.csv")
+```
+
+
+## Identifying regions of high missing homozygosity
+
 We correct for multiple testing using the Benjamini and Hochberg method.
 
 ```{r}
+
+sum(p.adjust(genoData$P, method = "bonferroni") < 0.05)
 
 top_variants <- read_csv("../Data/top_variants_high.csv") %>% 
     add_row(read_csv("../Data/top_variants_low.csv")) %>% 
@@ -23,3 +67,12 @@ plotable <- transmute(top_variants, BP = SNP, CHR = CHR, P = `HWE P`, SNP = SNP)
 library(qqman)
 manhattan(plotable)
 ```
+
+# System information
+
+**TODO: Find out what version of vcftools and plink are run on the cluster**
+
+```{r}
+Sys.info()
+```
+
