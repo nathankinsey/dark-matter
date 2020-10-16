@@ -37,8 +37,7 @@ genoData <- tibble()
 for (datafile in Sys.glob("../data/*.hwe")) {
     # Load in the data, one chromosome at a time, and filter out variants with more than 2 homozygous cases for both alleles
     hardy <- read_table2(datafile,
-    col_types = cols_only(GENO = col_character(), P = col_double(),
-                          SNP = col_character())) %>% 
+    col_types = cols_only(GENO = col_character(), P = col_double(), SNP = col_character())) %>% 
         separate(GENO, sep = "/", into = c("HOM_A1", "HET", "HOM_A2"), convert = TRUE) %>% 
         filter(HOM_A1 <= 2 | HOM_A2 <= 2) %>%
         separate(SNP, sep = ":", into = c("CHR", "BP"), convert = TRUE, remove = FALSE)
@@ -51,22 +50,61 @@ write_csv(genoData, "../data/genoData.csv")
 ```
 
 
-## Identifying regions of high missing homozygosity
+## Identifying regions of missing homozygosity (RMH)
 
-We correct for multiple testing using the Benjamini and Hochberg method.
+The HWE test statistics are used to identify regions of interest, similar to association p-values in a GWAS. As such, we can make Manhattan plots to visualize these regions. We correct for multiple testing using the highly conservative Bonferroni method. **TODO: Use the Benjamini and Hochberg method, if we want more (quantity) significant p-values**
 
-```{r}
+```{r manhattan}
+# Load the data, if running interactively and the previous chunk has not been run
+if (!exists("genoData")) {
+    genoData <- read_csv("../data/genoData.csv", 
+    col_types = cols(BP = col_integer(), CHR = col_integer(), HET = col_integer(), 
+        HOM_A1 = col_integer(), HOM_A2 = col_integer(), P = col_double(), SNP = col_character()))
+}
 
-sum(p.adjust(genoData$P, method = "bonferroni") < 0.05)
-
-top_variants <- read_csv("../Data/top_variants_high.csv") %>% 
-    add_row(read_csv("../Data/top_variants_low.csv")) %>% 
-    mutate(`HWE P` = p.adjust(top_variants$`HWE P`, method = "BH"))
-plotable <- transmute(top_variants, BP = SNP, CHR = CHR, P = `HWE P`, SNP = SNP)
+# Correct the p-values for multiple testing and plot them
+genoData <- mutate(genoData, P = p.adjust(P, method = "bonferroni"))
 
 library(qqman)
-manhattan(plotable)
+manhattan(genoData)
 ```
+
+After correction, there are `r sum(genoData$P < 0.05)` variants with adjusted p-values less than 0.05.
+
+## Linking RMH with predicted deleterious mutations
+
+
+## Using candidate lethal variants to identify runs of high heterozygousity
+
+THIS NEEDS TO BE DONE BY CHROMOSOME
+
+```{r regions}
+candidateRegions <- tibble()
+for (datafile in Sys.glob("../data/*.hwe")) {
+    # Load in the data, one chromosome at a time, and filter out variants with more than 2 homozygous cases for both alleles
+    hardy <- read_table2(datafile,
+    col_types = cols_only(GENO = col_character(), P = col_double(), SNP = col_character())) %>% 
+        separate(GENO, sep = "/", into = c("HOM_A1", "HET", "HOM_A2"), convert = TRUE) %>% 
+        filter(HOM_A1 <= 2 | HOM_A2 <= 2) %>%
+        separate(SNP, sep = ":", into = c("CHR", "BP"), convert = TRUE)
+    
+    # Identify regions with significantly low HWE p-values and mark their bounds
+    runs <- rle(hardy$P < 0.05)
+    regions <- tibble(bpEnd = hardy$BP[cumsum(runs$lengths)], signif = runs$values) %>% 
+        mutate(bpStart = lag(bpEnd, default = 0) + 1) %>% 
+        filter(signif == TRUE) %>%
+        mutate(CHR = hardy$CHR[1]) %>% 
+        select(CHR, bpStart, bpEnd) %>% 
+        mutate(length = bpEnd - bpStart)
+
+    candidateRegions <- bind_rows(candidateRegions, regions)
+    rm(hardy, runs, regions)
+}
+
+write_csv(candidateRegions, "../data/candidateRegions.csv")
+
+```
+
 
 # System information
 
