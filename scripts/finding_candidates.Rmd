@@ -6,81 +6,75 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
 
 library(tidyverse)
+library(knitr)
+library(rmarkdown)
 ```
 
 # Data source and attribution
 
 The data used for this analysis comes from the Dog Biomedical Variant Database Consortium (DBVDC). This repository of whole genome sequenced data comes from over 120 different dog breeds, including some wolves. The variety of genomic data in the dataset is further described in [a study by Jagannathan et. al. in 2019](https://doi.org/10.1111/age.12834). As of writing, there are 648 samples deposited for analysis. **TODO: I think Liza said there was an updated version with more samples. Consider rerunning when we get access. Also, I should find out the date of when we accessed the database and report it.** The file is stored in the conventional variant call format (VCF).
 
-# Sweeping the whole genome for missing homozygosity
+# Sweeping the whole genome for regions of missing homozygosity that may affect translation
 
 ## Data cleaning and preprocessing
 
-The compressed VCF altogether is around 150GB and it was computationally prohibitive to run statistical software on the entire file. As a result, the file was divided by chromosome and software was run on a per-chromosome basis. This should have no affect on the downstream processing, as all quality control (QC) checks are done per variant. This was done under the assumption that all samples in the database are of high enough quality to consider. **TODO: Verify that assumption. Check with others to see if there is a minimum amount of coverage that we should allow or if there are other reasons to discard entire samples.**
+The compressed VCF altogether is around 150GB and it was computationally prohibitive to run statistical software on the entire file. As a result, the file was divided by chromosome and software was run on a per-chromosome basis. This should have no affect on the downstream processing, as all quality control (QC) checks are done per variant. This was done under the assumption that all samples in the database are of high enough quality to consider. **TODO: Verify that assumption. Check with others to see if there is a minimum amount of coverage that we should allow or if there are other reasons to discard entire samples.** There were three samples that were removed from the data set, due to mixup and contamination concerns, leaving 645 remaining.
 
-```{bash eval=FALSE}
-# Extract each chromosome from the main file. Chromosome 1 is shown as an example
-vcftools --gzvcf dogs.648.vars.ann.vcf.gz --chr 1 --recode --stdout > Dogs648_1.vcf
-# Get frequency counts and Hardy-Weinberg test statistics
-plink --vcf Dogs648_1.vcf --dog --const-fid --allow-extra-chr --set-missing-var-ids @:# --geno 0.1 --maf 0.05 --hardy --freqx --out consortia_1
+```{bash cluster, eval=FALSE}
+#!/bin/bash
+#SBATCH --job-name=dm_extr_ann    # Job name
+#SBATCH --mail-type=ALL         # Mail events (NONE, BEGIN, END, FAIL, ALL)
+#SBATCH --mail-user=natkinsey@ucdavis.edu     # Where to send mail
+#SBATCH --nodes=1                    # Run all processes on a single node	
+#SBATCH --ntasks=1                   # Run a single task		
+#SBATCH --cpus-per-task=6            # Number of CPU cores per task	
+#SBATCH --mem=8gb                     # Job memory request
+#SBATCH --time=20:00:00               # Time limit hrs:min:sec
+#SBATCH --array=1
+#SBATCH --output=slurm_out/dm_extr_ann%j.log   # Standard output and error log
+pwd; hostname; date
+
+rawdata="/share/oberbaurlab/LCG/Dog_Genome_Consortium/dogs.648.vars.ann.vcf.gz"
+outpath="/share/oberbaurlab/nk/DarkMatter/ChrVCFs"
+
+# Extract a single chromosome, remove bad samples, and remove the INFO column to prepare for reannotaion
+cd $outpath
+module load bcftools/1.10.2
+bcftools index --threads 6 $rawdata
+bcftools view -Ou -r ${SLURM_ARRAY_TASK_ID} -s ^LN47,BE020,ZS14 $rawdata | bcftools annotate --remove INFO -O v -o dbvdc645_${SLURM_ARRAY_TASK_ID}.vcf
+module unload bcftools/1.10.2
+
+# Reannotate the VCF and delete the unannotated version
+cd /share/oberbaurlab/snpEff5
+module load java/jdk14.0.2
+java -Xmx8g -jar snpEff.jar CanFam3.1.101 ${outpath}/dbvdc645_${SLURM_ARRAY_TASK_ID}.vcf > ${outpath}/dbvdc645ann_${SLURM_ARRAY_TASK_ID}.vcf
+rm ${outpath}/dbvdc645_${SLURM_ARRAY_TASK_ID}.vcf
+
+# Filter out all variants that don't have a high or moderate calculated impact on translation
+java -Xmx8g -jar SnpSift.jar filter "ANN[*].IMPACT has 'HIGH' | ANN[*].IMPACT has 'MODERATE'" ${outpath}/dbvdc645ann_${SLURM_ARRAY_TASK_ID}.vcf > ${outpath}/dbvdc645exome_${SLURM_ARRAY_TASK_ID}.vcf
+module unload java/jdk14.0.2
+
+# Compress the VCF files and remove the headers from the "exome" data for easier processing in R. Delete the uncompressed files
+cd $outpath
+module load bcftools/1.10.2
+bcftools view -l 9 -O z -o dbvdc645ann_${SLURM_ARRAY_TASK_ID}.vcf.gz --threads 6 dbvdc645ann_${SLURM_ARRAY_TASK_ID}.vcf
+bcftools view -H -l 9 -O z -o dbvdc645exome_${SLURM_ARRAY_TASK_ID}.vcf.gz --threads 6 dbvdc645exome_${SLURM_ARRAY_TASK_ID}.vcf
 ```
 
-Plink was run on all of the chromosomal genetic data in the file to determine genotype frequency counts as well as Hardy-Weinberg equilibrium (HWE) exact test statistics. QC parameters discarded variants with higher than 10% missing call rates. Variants with a minor allele frequency of %5 or less were also discarded, as they were deemed too rare to prove insightful for this study.
+The chromosome WGS files were reannotated using snpEff5.0 and CanFam3.1.101 information from Ensembl, as the VCF file had highly outdated annotations. snpEff also predicted the impact of intergenic variants. This impact data was used to create a separate "exome" file for each chromosome that only included variants that were predicted to cause a premature stop, frameshift, missense mutation, or inframe deletion.
 
-While the HWE test statisitcs highlight exceedingly unbalanced ratios of homozygosity and heterozygosity, they do not differentiate between cases in which the equilibrium is violated based on too many heterozygotes or homozygotes. As such, variants with minor alleles that have more than 2 homozygous cases in the dataset were discarded. This means that all remaining variants with low HWE p-values must have unusually high heterozygosity and missing homozygosity. Such variants would imply recessive lethality.
+Plink was run on all of the newly annotated files (both WGS and filtered exome) to determine genotype frequency counts as well as Hardy-Weinberg equilibrium (HWE) exact test statistics. QC parameters discarded variants with higher than 10% missing call rates. Variants with a minor allele frequency of 5% or less were also discarded, as they were deemed too rare to prove insightful for this study.
 
-```{r cleaning}
-genoData <- tibble()
-for (datafile in Sys.glob("../data/*.hwe")) {
-    # Load in the data, one chromosome at a time, and filter out variants with more than 2 homozygous cases for both alleles
-    hardy <- read_table2(datafile,
-    col_types = cols_only(GENO = col_character(), P = col_double(), SNP = col_character())) %>% 
-        separate(GENO, sep = "/", into = c("HOM_A1", "HET", "HOM_A2"), convert = TRUE) %>% 
-        filter(HOM_A1 <= 2 | HOM_A2 <= 2) %>%
-        separate(SNP, sep = ":", into = c("CHR", "BP"), convert = TRUE, remove = FALSE)
+## Identifying candidate lethal regions using runs of missing homozygosity
 
-    genoData <- bind_rows(genoData, hardy)
-    rm(hardy)
-}
-
-write_csv(genoData, "../data/genoData.csv")
-```
-
-
-## Identifying regions of missing homozygosity (RMH)
-
-The HWE test statistics are used to identify regions of interest, similar to association p-values in a GWAS. As such, we can make Manhattan plots to visualize these regions. We correct for multiple testing using the highly conservative Bonferroni method. **TODO: Use the Benjamini and Hochberg method, if we want more (quantity) significant p-values**
-
-```{r manhattan}
-# Load the data, if running interactively and the previous chunk has not been run
-if (!exists("genoData")) {
-    genoData <- read_csv("../data/genoData.csv", 
-    col_types = cols(BP = col_integer(), CHR = col_integer(), HET = col_integer(), 
-        HOM_A1 = col_integer(), HOM_A2 = col_integer(), P = col_double(), SNP = col_character()))
-}
-
-# Correct the p-values for multiple testing and plot them
-genoData <- mutate(genoData, P = p.adjust(P, method = "bonferroni"))
-
-library(qqman)
-manhattan(genoData)
-```
-
-After correction, there are `r sum(genoData$P < 0.05)` variants with adjusted p-values less than 0.05.
-
-## Linking RMH with predicted deleterious mutations
-
-
-## Using candidate lethal variants to identify runs of high heterozygousity
-
-THIS NEEDS TO BE DONE BY CHROMOSOME
+While the HWE test statisitcs highlight exceedingly unbalanced ratios of homozygosity and heterozygosity, they do not differentiate between cases in which the equilibrium is violated based on too many heterozygotes or homozygotes. As such, variants with minor alleles that have more than 2 homozygous cases in the dataset were discarded. 2 cases were allowed to account for some genotyping error. This means that all remaining variants with low HWE p-values must have unusually high heterozygosity and missing homozygosity. Such variants would imply recessive lethality.
 
 ```{r regions}
 candidateRegions <- tibble()
-for (datafile in Sys.glob("../data/*.hwe")) {
+for (datafile in Sys.glob("../data/wgs/*.hwe")) {
     # Load in the data, one chromosome at a time, and filter out variants with more than 2 homozygous cases for both alleles
     hardy <- read_table2(datafile,
     col_types = cols_only(GENO = col_character(), P = col_double(), SNP = col_character())) %>% 
@@ -102,15 +96,71 @@ for (datafile in Sys.glob("../data/*.hwe")) {
 }
 
 write_csv(candidateRegions, "../data/candidateRegions.csv")
+```
+
+The first genomic screen performed searches for runs of variants with a p-value lower than 0.05. This is done so that downstream analysis pinpointing specific variants that impact protein synthesis can be better contextualized. As the purpose of these regions is to better understand the variants in them, the p-values are intentionally not corrected for multiple testing. This yields many regions and they are as wide as is likely informative. The output of the screen looks like the following:
+
+```{r sample1}
+kable(head(candidateRegions))
+```
+
+"CHR" denotes the chromosome number the region is on. "bpStart" and "bpEnd" mark the base-pair bounds of the start and end respectively of a region of missing homozygosity. "length" is a measure of the base-pair distance between the two bounds of the region. The full file is located in the data folder and is named "candidateRegions.csv."
+
+## Identifying high-impact variants with missing homozygosity
+
+The high-impact exomic data is filtered like above, removing variants with more than 2 homozygous minor cases. The HWE test statistics are used to identify variants of interest, similar to association p-values in a GWAS. As such, we can make Manhattan plots to visualize these regions. We correct for multiple testing using the highly conservative Bonferroni method. **TODO: Use the Benjamini and Hochberg method, if we want more (quantity) significant p-values**
+
+```{r manhattan}
+highImpact <- tibble()
+for (datafile in Sys.glob("../data/exome/*.hwe")) {
+    # Load in the data, one chromosome at a time, and filter out variants with more than 2 homozygous cases for both alleles
+    hardy <- read_table2(datafile,
+    col_types = cols_only(GENO = col_character(), P = col_double(), SNP = col_character())) %>% 
+        separate(GENO, sep = "/", into = c("HOM_A1", "HET", "HOM_A2"), convert = TRUE) %>% 
+        filter(HOM_A1 <= 2 | HOM_A2 <= 2) %>%
+        separate(SNP, sep = ":", into = c("CHR", "BP"), convert = TRUE)
+
+    highImpact <- bind_rows(highImpact, hardy)
+    rm(hardy)
+}
+
+# Correct the p-values for multiple testing and plot them
+highImpact <- mutate(highImpact, P = p.adjust(P, method = "bonferroni"))
+library(qqman)
+manhattan(highImpact)
+
+# Filter out insignificant variants and write to a file
+highImpact <- filter(highImpact, P < 0.01)
+write_csv(highImpact, "../data/highImpact.csv")
+```
+
+After correction, there are `r nrow(highImpact)` variants with adjusted p-values less than 0.01. The full file detailing these variants is located in the data folder and is named "highImpact.csv." A sample of the results are shown below:
+
+```{r sample2}
+kable(head(highImpact))
+```
+
+"CHR" denotes the chromomosome the variant is on and "BP" specifies its base-pair coordinates. "HOM_A1," "HET," and "HOM_A2" specify the allele counts homozygous minor, heterozygous, and homozygous major cases, respectively. "P" is the Bonferroni-corrected p-value for the Hardy-Weinberg exact test at that variant.
+
+## Linking high-impact variants to longer runs of missing homozygosity
+
+```{r}
+# Place each high-impact variant in 
+sigRegions <- tibble()
+for (i in 1:nrow(highImpact)) {
+    sigRegions <- bind_rows(sigRegions, filter(candidateRegions, CHR == highImpact[i,]$CHR, highImpact[i,]$BP >= bpStart, highImpact[i,]$BP <= bpEnd))
+}
+sigRegions <- distinct(sigRegions)
 
 ```
 
+```{r sample3}
+paged_table()
+```
 
 # System information
 
-**TODO: Find out what version of vcftools and plink are run on the cluster**
-
-```{r}
-Sys.info()
+```{r sysInfo}
+sessionInfo()
 ```
 
