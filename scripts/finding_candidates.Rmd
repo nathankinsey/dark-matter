@@ -32,16 +32,21 @@ The compressed VCF altogether is around 150GB and it was computationally prohibi
 #SBATCH --ntasks=1                   # Run a single task		
 #SBATCH --cpus-per-task=6            # Number of CPU cores per task	
 #SBATCH --mem=8gb                     # Job memory request
-#SBATCH --time=20:00:00               # Time limit hrs:min:sec
-#SBATCH --array=1
-#SBATCH --output=slurm_out/dm_extr_ann%j.log   # Standard output and error log
+#SBATCH --time=12:00:00               # Time limit hrs:min:sec
+#SBATCH --array=1-39
+#SBATCH --output=slurm_out/dm_extr_ann%A_%a.log   # Standard output and error log
 pwd; hostname; date
 
 rawdata="/share/oberbaurlab/LCG/Dog_Genome_Consortium/dogs.648.vars.ann.vcf.gz"
-outpath="/share/oberbaurlab/nk/DarkMatter/ChrVCFs"
+datapath="/share/oberbaurlab/nk/DarkMatter/data"
+
+# If working on chromosome 39, change all references to it to "X" for compatibility reasons
+if [ $SLURM_ARRAY_TASK_ID = 39 ]; then
+        SLURM_ARRAY_TASK_ID="X"
+fi
 
 # Extract a single chromosome, remove bad samples, and remove the INFO column to prepare for reannotaion
-cd $outpath
+cd ${datapath}/wgs
 module load bcftools/1.10.2
 bcftools index --threads 6 $rawdata
 bcftools view -Ou -r ${SLURM_ARRAY_TASK_ID} -s ^LN47,BE020,ZS14 $rawdata | bcftools annotate --remove INFO -O v -o dbvdc645_${SLURM_ARRAY_TASK_ID}.vcf
@@ -50,18 +55,27 @@ module unload bcftools/1.10.2
 # Reannotate the VCF and delete the unannotated version
 cd /share/oberbaurlab/snpEff5
 module load java/jdk14.0.2
-java -Xmx8g -jar snpEff.jar CanFam3.1.101 ${outpath}/dbvdc645_${SLURM_ARRAY_TASK_ID}.vcf > ${outpath}/dbvdc645ann_${SLURM_ARRAY_TASK_ID}.vcf
-rm ${outpath}/dbvdc645_${SLURM_ARRAY_TASK_ID}.vcf
+java -Xmx8g -jar snpEff.jar CanFam3.1.101 ${datapath}/wgs/dbvdc645_${SLURM_ARRAY_TASK_ID}.vcf > ${datapath}/wgs/dbvdc645ann_${SLURM_ARRAY_TASK_ID}.vcf
+rm ${datapath}/wgs/dbvdc645_${SLURM_ARRAY_TASK_ID}.vcf
 
-# Filter out all variants that don't have a high or moderate calculated impact on translation
-java -Xmx8g -jar SnpSift.jar filter "ANN[*].IMPACT has 'HIGH' | ANN[*].IMPACT has 'MODERATE'" ${outpath}/dbvdc645ann_${SLURM_ARRAY_TASK_ID}.vcf > ${outpath}/dbvdc645exome_${SLURM_ARRAY_TASK_ID}.vcf
+# Filter out all variants that don't have a high or moderate calculated impact on translation. Make a summary file of these variants
+java -Xmx8g -jar SnpSift.jar filter "ANN[*].IMPACT has 'HIGH' | ANN[*].IMPACT has 'MODERATE'" ${datapath}/wgs/dbvdc645ann_${SLURM_ARRAY_TASK_ID}.vcf > ${datapath}/exome/dbvdc645exome_${SLURM_ARRAY_TASK_ID}.vcf
+java -Xmx8g -jar SnpSift.jar extractFields -s ", " ${datapath}/exome/dbvdc645exome_${SLURM_ARRAY_TASK_ID}.vcf "CHROM" "POS" "ANN[*].IMPACT" "ANN[*].EFFECT" "ANN[*].GENE" > ${datapath}/exome/dbvdc645exome_${SLURM_ARRAY_TASK_ID}.txt
 module unload java/jdk14.0.2
 
-# Compress the VCF files and remove the headers from the "exome" data for easier processing in R. Delete the uncompressed files
-cd $outpath
+# Compress the VCF files and delete the uncompressed files
+cd $datapath
 module load bcftools/1.10.2
-bcftools view -l 9 -O z -o dbvdc645ann_${SLURM_ARRAY_TASK_ID}.vcf.gz --threads 6 dbvdc645ann_${SLURM_ARRAY_TASK_ID}.vcf
-bcftools view -H -l 9 -O z -o dbvdc645exome_${SLURM_ARRAY_TASK_ID}.vcf.gz --threads 6 dbvdc645exome_${SLURM_ARRAY_TASK_ID}.vcf
+bcftools view -l 9 -O z -o wgs/dbvdc645ann_${SLURM_ARRAY_TASK_ID}.vcf.gz --threads 6 wgs/dbvdc645ann_${SLURM_ARRAY_TASK_ID}.vcf
+bcftools view -l 9 -O z -o exome/dbvdc645exome_${SLURM_ARRAY_TASK_ID}.vcf.gz --threads 6 exome/dbvdc645exome_${SLURM_ARRAY_TASK_ID}.vcf
+rm wgs/dbvdc645ann_${SLURM_ARRAY_TASK_ID}.vcf
+rm exome/dbvdc645exome_${SLURM_ARRAY_TASK_ID}.vcf
+module unload bcftools/1.10.2
+
+# Generate HWE p-values and allele counts
+module load plink2
+plink2 --vcf ${datapath}/exome/dbvdc645exome_${SLURM_ARRAY_TASK_ID}.vcf.gz --dog --const-fid --set-missing-var-ids @:# --geno 0.1 --maf 0.05 --hardy --out ${datapath}/exome/dbvdc645_${SLURM_ARRAY_TASK_ID}
+plink2 --vcf ${datapath}/wgs/dbvdc645ann_${SLURM_ARRAY_TASK_ID}.vcf.gz --dog --debug --const-fid --set-missing-var-ids @:# --geno 0.1 --maf 0.05 --hardy --out ${datapath}/wgs/dbvdc645ann_${SLURM_ARRAY_TASK_ID}
 ```
 
 The chromosome WGS files were reannotated using snpEff5.0 and CanFam3.1.101 information from Ensembl, as the VCF file had highly outdated annotations. snpEff also predicted the impact of intergenic variants. This impact data was used to create a separate "exome" file for each chromosome that only included variants that were predicted to cause a premature stop, frameshift, missense mutation, or inframe deletion.
