@@ -1,7 +1,7 @@
 ---
 title: "Screening for candidate high impact variants with missing homozygosity"
 author: "Nathan Kinsey"
-date: "10/29/2020"
+date: "`r Sys.Date()`"
 output: html_document
 ---
 
@@ -16,13 +16,13 @@ library(rmarkdown)
 
 # Data source and attribution
 
-The data used for this analysis comes from the Dog Bio-medical Variant Database Consortium (DBVDC). This repository of whole genome sequenced data comes from over 120 different dog breeds, including some wolves. The variety of genomic data in the data set is further described in [a study by Jagannathan et. al. in 2019](https://doi.org/10.1111/age.12834). As of writing, there are 648 samples deposited for analysis. **TODO: I think Liza said there was an updated version with more samples. Consider rerunning when we get access. Also, I should find out the date of when we accessed the database and report it.** The file is stored in the conventional variant call format (VCF).
+The data used for this analysis comes from the Dog Bio-medical Variant Database Consortium (DBVDC). This repository of whole genome sequenced data comes from over 120 different dog breeds, including some wolves. The variety of genomic data in the data set is further described in [a study by Jagannathan et. al. in 2019](https://doi.org/10.1111/age.12834). At the time of writing, there are 813 samples deposited for analysis. The file is stored in the conventional variant call format (VCF).
 
 # Sweeping the whole genome for estimated high-impact, suspected highly-penetrant recessive lethal variants
 
 ## Data cleaning and pre-processing
 
-The compressed VCF altogether is around 150GB and it was computationally prohibitive to run statistical software on the entire file. As a result, the file was divided by chromosome and software was run on a per-chromosome basis. This should have no affect on the downstream processing, as all quality control (QC) checks are done per variant. This was done under the assumption that all samples in the database are of high enough quality to consider. **TODO: Verify that assumption. Check with others to see if there is a minimum amount of coverage that we should allow or if there are other reasons to discard entire samples.** There were three samples that were removed from the data set, due to mix-up and contamination concerns, leaving 645 remaining.
+The compressed VCF altogether is around 150GB and it was computationally prohibitive to run statistical software on the entire file. As a result, the file was divided by chromosome and software was run on a per-chromosome basis. This should have no affect on the downstream processing, as all quality control (QC) checks are done per variant. This was done under the assumption that all samples in the database are of high enough quality to consider. There were three samples that were removed from the data set, due to mix-up and contamination concerns, leaving 810 remaining.
 
 ```{bash preprocessing, eval=FALSE}
 #!/bin/bash
@@ -38,7 +38,7 @@ The compressed VCF altogether is around 150GB and it was computationally prohibi
 #SBATCH --output=slurm_out/dmExtract%A_%a.log   # Standard output and error log
 pwd; hostname; date
 
-rawdata="/share/oberbaurlab/LCG/Dog_Genome_Consortium/dogs.648.vars.ann.vcf.gz"
+rawdata="/share/oberbaurlab/LCG/Dog_Genome_Consortium/dogs.813.vars.flt.ann.vcf.gz"
 datapath="/share/oberbaurlab/nk/DarkMatter/data"
 
 # If working on chromosome 39, change all references to it to "X" for compatibility reasons
@@ -46,41 +46,25 @@ if [ $SLURM_ARRAY_TASK_ID = 39 ]; then
         SLURM_ARRAY_TASK_ID="X"
 fi
 
-# Extract a single chromosome, remove bad samples, and remove the INFO column to prepare for reannotaion
+# Extract a single chromosome and remove bad samples
 cd ${datapath}/wgs
 module load bcftools/1.10.2
 bcftools index --threads 6 $rawdata
-bcftools view -Ou -r ${SLURM_ARRAY_TASK_ID} -s ^LN47,BE020,ZS14 $rawdata | bcftools annotate --remove INFO -O v -o dbvdc645_${SLURM_ARRAY_TASK_ID}.vcf
-module unload bcftools/1.10.2
-
-# Reannotate the VCF and delete the unannotated version
-cd /share/oberbaurlab/snpEff5
-module load java/jdk14.0.2
-java -Xmx8g -jar snpEff.jar CanFam3.1.101 ${datapath}/wgs/dbvdc645_${SLURM_ARRAY_TASK_ID}.vcf > ${datapath}/wgs/dbvdc645ann_${SLURM_ARRAY_TASK_ID}.vcf
-rm ${datapath}/wgs/dbvdc645_${SLURM_ARRAY_TASK_ID}.vcf
-module unload java/jdk14.0.2
-
-# Compress the VCF files and delete the uncompressed files
-cd $datapath
-module load bcftools/1.10.2
-bcftools view -l 9 -O z -o wgs/dbvdc645ann_${SLURM_ARRAY_TASK_ID}.vcf.gz --threads 6 wgs/dbvdc645ann_${SLURM_ARRAY_TASK_ID}.vcf
-rm wgs/dbvdc645ann_${SLURM_ARRAY_TASK_ID}.vcf
+bcftools view -l 9 -O z -r ${SLURM_ARRAY_TASK_ID} -s ^LN47,BE020,ZS14 -o dbvdc810_${SLURM_ARRAY_TASK_ID}.vcf.gz --threads 6 $rawdata 
 module unload bcftools/1.10.2
 
 # Use Ensembl VEP to predict the effect of variants
 cd /share/oberbaurlab/ensembl-vep
-./vep -i ${datapath}/wgs/dbvdc645ann_${SLURM_ARRAY_TASK_ID}.vcf.gz -o ${datapath}/wgs/VEP_${SLURM_ARRAY_TASK_ID}.txt --sift b --offline --cache --dir ./cache/ --fork 4 --buffer_size 10000 --no_stats --species canis_lupus_familiaris --tab --fields "Location,Allele,Gene,Consequence,IMPACT,SIFT"
+./vep -i ${datapath}/wgs/dbvdc810_${SLURM_ARRAY_TASK_ID}.vcf.gz -o ${datapath}/wgs/VEP_${SLURM_ARRAY_TASK_ID}.txt --sift b --offline --cache --dir ./cache_dir/ --fork 4 --buffer_size 10000 --no_stats --species canis_lupus_familiaris --tab --fields "Location,Allele,Gene,Consequence,IMPACT,SIFT"
 
 # Generate HWE p-values and allele counts
 module load plink2
-plink2 --vcf ${datapath}/wgs/dbvdc645ann_${SLURM_ARRAY_TASK_ID}.vcf.gz --dog --const-fid --set-missing-var-ids @:# --geno 0.1 --maf 0.05 --hardy --out ${datapath}/wgs/dbvdc645ann_${SLURM_ARRAY_TASK_ID}
+plink2 --vcf ${datapath}/wgs/dbvdc810_${SLURM_ARRAY_TASK_ID}.vcf.gz --dog --const-fid --set-missing-var-ids @:# --maf 0.05 --max-maf 0.25 --hardy --out ${datapath}/wgs/dbvdc810_${SLURM_ARRAY_TASK_ID}
 ```
 
-The chromosome WGS files were re-annotated using snpEff5.0 and CanFam3.1.101 information from Ensembl, as the VCF file had highly outdated annotations. These annotations should have no impact on the following analysis.
+Ensembl VEP (Version 104) was used to predict the impact of variants found in the VCFs as well as generate SIFT scores to estimate how deleterious the missense mutations were. SIFT scores consider "sequence conservation and amino acid properties to predict whether an amino acid substitution is deleterious" [(Vaser et al., 2016)](https://doi.org/10.1038/nprot.2015.123).
 
-Ensembl VEP was used to predict the impact of variants found in the VCFs as well as generate SIFT scores to estimate how deleterious the missense mutations were. SIFT scores consider "sequence conservation and amino acid properties to predict whether an amino acid substitution is deleterious" [(Vaser et. al., 2016)](https://doi.org/10.1038/nprot.2015.123).
-
-Plink was run on all of the newly annotated files (both WGS and filtered exome) to determine genotype frequency counts as well as Hardy-Weinberg equilibrium (HWE) exact test statistics. Plink 2 was notably used, as it is able to handle multiallelic variants, unlike its predecessor. QC parameters discarded variants with higher than 10% missing call rates. Variants with a minor allele frequency of 5% or less were also discarded, as they were deemed too rare to prove insightful for this study.
+Plink was run on all of the DBVDC WGS data to determine genotype frequency counts as well as Hardy-Weinberg equilibrium (HWE) exact test statistics. Plink 2 was notably used, as it is able to handle multiallelic variants, unlike its predecessor. QC parameters discarded variants with a minor allele frequency of 5% or less, as they were deemed too rare to prove insightful for this study. A maximum minor allele frequency of 17% was set, as that is a bit higher than the 15.2% maximum for recessive lethal previously reported in cattle [(Upperman et al., 2019)](https://doi.org/10.1186/s12711-019-0477-3). A maximum was deemed necessary to include, as not setting one highlighted regions with sequencing issues rather than true recessive lethal variants. A maximum carrier frequency of 25% was also set, as the maximum specified in the same paper was 23.4%.
 
 ## Identifying variants with high estimated impact on protein function
 
@@ -100,6 +84,7 @@ for (datafile in Sys.glob("../data/wgs/*.txt")) {
 }
 
 write_csv(highImpact, "../data/highImpact.csv")
+
 numHighImpact <- nrow(highImpact)
 ```
 
@@ -113,30 +98,56 @@ kable(head(highImpact))
 
 ## Identifying variants with suspected highly-penetrant recessive lethality
 
-While the HWE test statistics highlight exceedingly unbalanced ratios of homozygosity and heterozygosity, they do not differentiate between cases in which the equilibrium is violated based on too many heterozygotes or homozygotes. As such, variants with minor alleles that have more than 2 homozygous cases in the data-set were discarded. 2 cases were allowed to account for some genotyping error. This means that all remaining variants with low HWE p-values must have unusually high heterozygosity and missing homozygosity. Such variants would imply recessive lethality. **TODO: I read that low HWE statistics can signify genotyping error. Read more on what that means and verify that it doesn't interfere with the study.**
+While the HWE test statistics highlight exceedingly unbalanced ratios of homozygosity and heterozygosity, they do not differentiate between cases in which the equilibrium is violated based on too many heterozygotes or homozygotes. As such, variants with minor alleles that have more than 2 homozygous cases in the data-set were discarded. 2 cases were allowed to account for some genotyping error. This means that all remaining variants with low HWE p-values must have unusually high heterozygosity and missing homozygosity. Such variants would imply recessive lethality.
 
-Variants with HWE p-values greater than 0.05 were discarded. We correct for multiple testing using the highly conservative Bonferroni method. **TODO: Use the Benjamini and Hochberg method, if we want more (quantity) significant p-values. I could also correct for multiple testing and filter out low significance variants after merging with the impact data. That would also make the correction less conservative.**
+Variants with HWE p-values greater than 0.05 were discarded. We correct for multiple testing using the Benjamini & Yekutieli (2001) method to control the false discovery rate.
 
 ```{r hwe}
 # Read HWE exact test and genotype count data from Plink and filter for suspected recessive lethality
 susLethal <- tibble()
 numTotalVar <- 0
+
+# Perform MAF and carrier frequency filtering, as PLINK did not do so successfully
+calcMAF <- function(hom1, het, hom2) {
+    freq1 <- (hom1 + het / 2) / sum(hom1, het, hom2)
+    if (is.na(freq1)){
+        return(999)
+    } else if (freq1 <= 0.5) {
+        return(freq1)
+    } else {
+        return(1 - freq1)
+    }
+}
+
+calcCarrier <- function(hom1, het, hom2) {
+    return(het / sum(hom1, het, hom2))
+}
+
 for (datafile in Sys.glob("../data/wgs/*.hardy")) {
     hardy <- fread(file = datafile) %>% 
         select(!c("#CHROM", "O(HET_A1)", "E(HET_A1)")) %>% 
         separate(col = ID, sep = ":", into = c("CHR", "BP"), convert = TRUE)
     
     numTotalVar <- numTotalVar + nrow(hardy)
-    hardy <- filter(hardy, HOM_A1_CT <= 2 | TWO_AX_CT <=2)
+    hardy <- filter(hardy, HOM_A1_CT <= 2 | TWO_AX_CT <=2) %>% 
+        rowwise() %>%
+        mutate(MAF = calcMAF(`HOM_A1_CT`, `HET_A1_CT`, `TWO_AX_CT`)) %>% 
+        mutate(carryF = calcCarrier(`HOM_A1_CT`, `HET_A1_CT`, `TWO_AX_CT`)) %>%
+        ungroup() %>% 
+        filter(MAF <= 0.17 & carryF <= 0.25 & MAF >= 0.05)
     
     susLethal <- bind_rows(susLethal, hardy)
     rm(hardy)
 }
 
-susLethal <- mutate(susLethal, P = p.adjust(P, method = "bonferroni")) %>% 
+susLethal <- mutate(susLethal, P = p.adjust(P, method = "BY")) %>% 
     filter(P < 0.05)
+write_csv(susLethal, "../data/susLethal.csv")
+
 numLethal <- nrow(susLethal)
 ```
+
+The suspected lethal variants were written to "susLethal.csv." "CHR" denotes the chromosome the variant is on and "BP" specifies its base-pair coordinates. "A1" and "AX" denote the reference and alternate alleles respectively. "HOM_A1_CT" counts the number of samples homozygous for the reference allele, "HET_A1_CT" counts the number heterozygous for the reference allele, and "TWO_AX_CT" counts the number with two alternate alleles (not necessarily homozygous at loci with more than two alleles). "P" specifies the BY-corrected P-values that the variant is in Hardy-Weinberg equilibrium. "MAF" and "carryF" are the minor allele frequency and carrier frequency, respectively.
 
 ## Cross-referencing identified variants to yield candidates for downstream validation
 
@@ -161,7 +172,7 @@ The candidates were written to "candidates.csv." A sample of the results are sho
 kable(head(candidates))
 ```
 
-"CHR" denotes the chromosome the variant is on and "BP" specifies its base-pair coordinates. "Gene" refers to the Ensembl-stable gene ID and does not contain any common gene names. "Consequence" denotes the variant's likely effect on transcription or translation. "A1" and "AX" refer to the two alleles that were counted and used for HWE test statistics. "HOM_A1_CT," "HET_A1_CT," and "TWO_AX_CT" specify the genotype counts for homozygous first allele, heterozygous, and homozygous second allele cases respectively. "P" is the Bonferroni-corrected p-value for the Hardy-Weinberg exact test with that variant.
+"CHR" denotes the chromosome the variant is on and "BP" specifies its base-pair coordinates. "Gene" refers to the Ensembl-stable gene ID and does not contain any common gene names. "Consequence" denotes the variant's likely effect on transcription or translation. "A1" and "AX" refer to the two alleles that were counted and used for HWE test statistics. "HOM_A1_CT," "HET_A1_CT," and "TWO_AX_CT" specify the genotype counts for homozygous first allele, heterozygous, and homozygous second allele cases, respectively. "P" is the BY-corrected p-value for the Hardy-Weinberg exact test with that variant. "MAF" and "carryF" are the minor allele frequency and carrier frequency, respectively.
 
 ## Identifying candidate genes implicated by the screened variants
 
@@ -174,7 +185,7 @@ paged_table(distinct(select(candidates, CHR, Gene)))
 # System information
 
 PLINK v2.00a3LM 64-bit Intel (20 Oct 2020) was used to generate HWE test statistics and allele counts.
-Ensembl VEP version 101 was used for annotation and impact prediction, using CanFam3.1.
+Ensembl VEP version 104 was used for annotation and impact prediction, using CanFam3.1.
 
 ```{r sysInfo}
 sessionInfo()

@@ -1,0 +1,91 @@
+---
+title: "Statistics on Recessive Embryonic Lethal Candidate Variants"
+author: "Nathan Kinsey"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+
+library(tidyverse)
+library(data.table)
+library(knitr)
+library(rmarkdown)
+library(biomaRt)
+```
+
+# Statistics for candidate variants
+
+The following script outputs counts for different subsets of input data. In the output tables, "GeneID" is the Ensembl stable gene ID. "Gene" is the more common name, if there is one. "bpStart" and "bpEnd" denote the base pair coordinates marking the start and end of the indicated gene, respectively. "CHRNumVar" tallies the number of variants in the dataset per chromosome. "GeneNumVar" does the same count for genes.
+
+```{r}
+# Load the candidate variant data
+candidates <- read_csv("../data/810data/candidates.csv") %>% 
+    rename(GeneID = Gene)
+
+# Build a BioMart query to get information on the genes in the dataset
+ensembl <- useEnsembl(biomart = "ensembl", dataset = "clfamiliaris_gene_ensembl")
+ensemblGenes <- getBM(filters= "ensembl_gene_id", attributes= c("ensembl_gene_id", "external_gene_name", "chromosome_name", "start_position", "end_position", "description"), values = candidates$GeneID, mart = ensembl)
+colnames(ensemblGenes) <- c("GeneID", "Gene", "CHR", "bpStart", "bpEnd", "Description")
+
+# Merge the Ensembl gene data in with the variants
+candidates <- inner_join(candidates, ensemblGenes)
+
+calcCounts <- function(variants) {
+    # Calculate counts of variant numbers and genes per dataset and chromosome
+    print(paste("There are", nrow(variants), "total variants in this dataset.", sum(str_detect(variants$Consequence, "missense")), "of these variants are predicted damaging missense mutations."))
+    print(paste("There are", length(unique(variants$GeneID)), "total genes in this dataset."))
+    
+    variants %>% 
+        dplyr::select(CHR, GeneID, Gene:bpEnd) %>% 
+        add_count(CHR, name = "CHRNumVar") %>% 
+        add_count(GeneID, name = "GeneNumVar") %>% 
+        distinct() %>% 
+        arrange(CHR) %>% 
+        paged_table()
+}
+
+write_csv(candidates, "../data/810data/ensemblCandidateData.csv")
+#candidates <- read_csv("../data/810data/ensemblCandidateData.csv")
+```
+
+The counts for all candidates are below. These are defined as genes with significantly missing homozygosity and predicted damaging mutations.
+
+```{r}
+calcCounts(candidates)
+```
+
+# Checking BAM Files
+
+The candidate genes must be checked for sequencing issues, as previous investigation discovered that loci may appear heterozygous when they are actually two different loci that are a result of a duplication. When the duplication is not correctly a part of the assembly that the sequencing reads are aligned to, it causes false-positives. Files "Gene_extract.txt" and "bamExtract.txt" are created to assist in running batch SLURM jobs on a campus HPC cluster for getting VCFs and BAM files respectively. The VCFs of our own lab data is necessary to identify samples that have the variants of interest. The BAM files for some of those samples are then checked for sequencing issues in the area. This is done by taking a representative read or two and BLASTing it against the multiple assemblies on NCBI. If another region shows up as a better match, the gene is discarded as a false-positive. If our own lab does not have WGS data on a dog with the flagged variant, the gene is also discarded as it can not be meaningfully pursued further.
+
+```{r}
+# Create name column that uses common name if available for output files
+candidates <- mutate(candidates, geneName = case_when(Gene != "" ~ Gene, TRUE ~ GeneID))
+
+# Make VCF extract file
+candidates %>% 
+    dplyr::select(geneName, CHR, bpStart, bpEnd) %>% 
+    distinct() %>% 
+    write_tsv("Gene_extract.txt", col_names = FALSE)
+
+# Make BAM extract file
+candidates %>% 
+    mutate(genCoord = paste0(CHR, ":", bpStart - 500, "-", bpEnd + 500)) %>% 
+    filter(Gene != "") %>% 
+    dplyr::select(geneName, genCoord) %>% 
+    distinct() %>% 
+    write_tsv("bamExtract.txt", col_names = FALSE)
+
+# Record variants for easier sample selection
+candidates %>% 
+    arrange(CHR, BP) %>% 
+    filter(Gene != "") %>% 
+    mutate(variant = paste0(CHR, ":", BP, A1, ">", AX)) %>% 
+    select(Gene, variant) %>% 
+    distinct() %>% 
+    paged_table()
+```
+
+The above table compactly states the genes and variants of interest, for easier importing into a note taking application.

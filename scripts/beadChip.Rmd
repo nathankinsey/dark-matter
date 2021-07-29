@@ -1,0 +1,108 @@
+---
+title: "Bead Chip Analysis"
+author: "Nathan Kinsey"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+
+library(tidyverse)
+library(knitr)
+library(rmarkdown)
+```
+
+# Visualizing the distrubtion of suspected lethal variants
+
+The following graphs contain three main components: a line functioning as a histogram of the embryonic lethal variant counts across the chromosome, dashes right above the x-axis that provide a higher-resolution image of the exact location of these variants, and red dots that mark BeadChip variants that were also flagged as potentially embryonic lethal.
+
+```{r raincloud}
+candidates <- read_csv("../data/810data/candidates.csv") %>% 
+    arrange(CHR, BP)
+chipSnps <- read_csv("../data/chipSnps.csv")
+
+for (i in unique(candidates$CHR)) {
+    p <- ggplot(filter(candidates, CHR == i), aes(x = BP)) +
+        geom_rug() +
+        geom_freqpoly(bins = 100) +
+        scale_x_continuous(n.breaks = 8) +
+        labs(x = "Location of variant (bp)", y = "Number of variants in a region") +
+        ggtitle(paste("Distribution of suspected lethal variants on chromosome", i))
+    
+    # Add BeadChip SNPs to applicable graphs
+    if (i %in% chipSnps$CHR) {
+        p <- p + geom_point(data = filter(chipSnps, CHR == i), aes(BP, 0), color = "red", size = 2) +
+            geom_text(data = filter(chipSnps, CHR == i), aes(BP, 0, label = SNP), angle = 45, size = 3, hjust = 0, vjust = 0, nudge_y = 0.5)
+    }
+    
+    print(p)
+}
+```
+
+# Distance statistics between BeadChip SNPs and WGS variants
+
+In the following data tables, "SNP" denotes the SNP name used by Illumina to identify variants on its BeadChip arrays. "CHR" and "BP" denote its chromosome and base-pair coordinates respectively. "Closest Variant" is the base-pair coordinate of the closest WGS variant flagged as potentially high impact embryonic lethal. "distance" records the exact distance between the BeadChip SNPs and WGS variant.
+
+```{r distance}
+findClosest <- function(c, bp) {
+    # Make a list of the location of each candidate variant on the specified chromosome
+    varBp <- filter(candidates, CHR == c)$BP
+    if (length(varBp) == 0) {
+        return(NA)
+    }
+    
+    # Find the closest variant in the list above to the specified location
+    varBp[which.min(abs(varBp - bp))]
+}
+
+chipSnps <- rowwise(chipSnps) %>% 
+    mutate("Closest Variant" = findClosest(CHR, BP), distance = abs(BP - `Closest Variant`))
+
+kable(chipSnps)
+```
+
+The following are some basic statistics on the closest distances between BeadChip SNPs and WGS variants.
+
+```{r summary}
+summary(chipSnps$distance)
+```
+
+# Finding WGS variants that appear close to BeadChip variants
+
+Using the above figures as guides of closeness, WGS candidate variants within 750,000 bp of a candidate BeadChip SNP are reported below
+
+```{r concordance}
+closeVars <- function(x, searchBP = 750000) {
+    filter(candidates, CHR == x[c("CHR")], BP <= x[c("BP")] + searchBP, BP >= x[c("BP")] - searchBP)
+}
+
+overlap <- bind_rows(apply(chipSnps[c("CHR", "BP")], 1, closeVars))
+paged_table(overlap)
+```
+
+There are `r nrow(overlap)` WGS variants that flagged as close to BeadChip SNPs in this way, representing `r length(unique(overlap$Gene))` genes.
+
+Some basic information about all of the genes with candidate variants are pulled from Ensembl below. In the output table, "GeneID" is the Ensembl stable gene ID. "Gene" is the more common name, if there is one. "CHR" denotes what chromosome the gene is on. "bpStart" and "bpEnd" denote the base pair coordinates marking the start and end of the indicated gene, respectively. "Description" is a short protein description from Ensembl.
+
+```{r genes}
+genes <- dplyr::select(candidates, Gene) %>%
+    distinct() %>% 
+    rename(GeneID = Gene)
+
+# Build a BioMart query to get information on the genes in the dataset
+library(biomaRt)
+
+ensembl <- useEnsembl(biomart = "ensembl", dataset = "clfamiliaris_gene_ensembl")
+ensemblGenes <- getBM(filters= "ensembl_gene_id", attributes= c("ensembl_gene_id", "external_gene_name", "chromosome_name", "start_position", "end_position", "description"), values = genes$GeneID, mart = ensembl)
+colnames(ensemblGenes) <- c("GeneID", "Gene", "CHR", "bpStart", "bpEnd", "Description")
+
+kable(arrange(ensemblGenes, CHR, bpStart))
+```
+
+```{r mgiList}
+fileConn<-file("mgiList.txt")
+writeLines(unique(ensemblGenes$Gene), fileConn)
+close(fileConn)
+```
+
