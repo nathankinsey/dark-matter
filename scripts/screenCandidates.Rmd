@@ -50,7 +50,7 @@ fi
 cd ${datapath}/wgs
 module load bcftools/1.10.2
 bcftools index --threads 6 $rawdata
-bcftools view -l 9 -O z -r ${SLURM_ARRAY_TASK_ID} -s ^LN47,BE020,ZS14 -o dbvdc810_${SLURM_ARRAY_TASK_ID}.vcf.gz --threads 6 $rawdata 
+bcftools view -l 9 -O z -r ${SLURM_ARRAY_TASK_ID} -s ^LN47,BE020,ZS14,5607,6413,6579,13151,14884,16544,206-09A,AM236B1,BC1021,BC1026,BC203,BC223,BC377,BC388,BC399,BC556,BC569,BC576,BC577,BC650__BC_29772,BC674,BC824,BC877,BC907,BC922,BC925,BE045__BE13737,BE058,BE059,BE060,BH004,BH006,BH007,BH008,BT026__BUT_25746,CE089__12858,CE090__12169,CH024__Dog1,CH025__CHI_28183,CP011_HCS00515,CP013__Dog1,DA79,DA80,DB1,DB4,DDT426A1,DH132__MLHD_1617,DH148,DO664__D_34425,DS071_15741,DS072_18977,DS075_B,EM001,EM002,FB067__FBD_26569,FL01,FR799__FCR_25384,FR896__FCR_7897,FS001_24481,FS002_24942,GEB056,GEB068,GEB069,GEB070,GR1153_16525,GR1154_T13683,GR1155_T14931,GR1156_T15774,GR1214__Dog2,GY442__G_26133,IP001__ISP_21897,IR035__IRW_18176,IR036__IRW_19247,IR037__IRW_19251,IR038__IRW_19642,IST010,IT460_IT_29138,IW010,JR046_8848,JR047__14104,KKK443A1,LEO159A1,MA463,MI026__LR_26102,MI028,MI029,MI030,MP009__PUG_26233,NR562,PG006__BGVP_29686,PL0127,PL0128,PL0129,PL126,PL149__SP02,PL174,PL179_MP046,PL180_MP065,PL181_MP071,PL182_MP076,PL183_MPBilly,PL184_MPRay,RO009,SBT_25852,SC260__SCT_29475,SC261__ST_23245,SD010,SD011,SY057__SHY_25314,SY058__NIT_27882,TB006__BOT_26042,V_21485,VP432A1,WC002,WC004,WSP02_WSS_24604,WSS_25078,WSS377A1,YT037__PER_BAN00197,YT043__PER_BAN00315,YT051__PER_BAN00463,YT064__PER00167,YT069__PER00313,YT071__PER00321,YT113__8338,YT114__12017,ZZ020,ZZ021,ZZ036__10196,ZZ037,ZZ038__MS_14809,ZZ039,ZZ134,ZZ136 -o dbvdc810_${SLURM_ARRAY_TASK_ID}.vcf.gz --threads 6 $rawdata 
 module unload bcftools/1.10.2
 
 # Use Ensembl VEP to predict the effect of variants
@@ -74,13 +74,13 @@ Two main reports from VEP were used to categorize variants as "high-impact." The
 # Read annotation data from VEP and filter out lower-impact variants
 highImpact <- tibble()
 for (datafile in Sys.glob("../data/wgs/*.txt")) {
-    vep <- fread(file = datafile, skip = "#Location", na.strings = "-") %>% 
-        filter(IMPACT == "HIGH" | str_detect(SIFT, "deleterious\\(")) %>% 
-        separate(col = "#Location", sep = ":", into = c("CHR", "BP"), convert = TRUE) %>% 
-        distinct()
-    
-    highImpact <- bind_rows(highImpact, vep)
-    rm(vep)
+  vep <- fread(file = datafile, skip = "#Location", na.strings = "-") %>%
+    filter(IMPACT == "HIGH" | str_detect(SIFT, "deleterious\\(")) %>%
+    separate(col = "#Location", sep = ":", into = c("CHR", "BP"), convert = TRUE) %>%
+    distinct()
+
+  highImpact <- bind_rows(highImpact, vep)
+  rm(vep)
 }
 
 write_csv(highImpact, "../data/highImpact.csv")
@@ -109,39 +109,39 @@ numTotalVar <- 0
 
 # Perform MAF and carrier frequency filtering, as PLINK did not do so successfully
 calcMAF <- function(hom1, het, hom2) {
-    freq1 <- (hom1 + het / 2) / sum(hom1, het, hom2)
-    if (is.na(freq1)){
-        return(999)
-    } else if (freq1 <= 0.5) {
-        return(freq1)
-    } else {
-        return(1 - freq1)
-    }
+  freq1 <- (hom1 + het / 2) / sum(hom1, het, hom2)
+  if (is.na(freq1)) {
+    return(999)
+  } else if (freq1 <= 0.5) {
+    return(freq1)
+  } else {
+    return(1 - freq1)
+  }
 }
 
 calcCarrier <- function(hom1, het, hom2) {
-    return(het / sum(hom1, het, hom2))
+  return(het / sum(hom1, het, hom2))
 }
 
 for (datafile in Sys.glob("../data/wgs/*.hardy")) {
-    hardy <- fread(file = datafile) %>% 
-        select(!c("#CHROM", "O(HET_A1)", "E(HET_A1)")) %>% 
-        separate(col = ID, sep = ":", into = c("CHR", "BP"), convert = TRUE)
-    
-    numTotalVar <- numTotalVar + nrow(hardy)
-    hardy <- filter(hardy, HOM_A1_CT <= 2 | TWO_AX_CT <=2) %>% 
-        rowwise() %>%
-        mutate(MAF = calcMAF(`HOM_A1_CT`, `HET_A1_CT`, `TWO_AX_CT`)) %>% 
-        mutate(carryF = calcCarrier(`HOM_A1_CT`, `HET_A1_CT`, `TWO_AX_CT`)) %>%
-        ungroup() %>% 
-        filter(MAF <= 0.17 & carryF <= 0.25 & MAF >= 0.05)
-    
-    susLethal <- bind_rows(susLethal, hardy)
-    rm(hardy)
+  hardy <- fread(file = datafile) %>%
+    select(!c("#CHROM", "O(HET_A1)", "E(HET_A1)")) %>%
+    separate(col = ID, sep = ":", into = c("CHR", "BP"), convert = TRUE)
+
+  numTotalVar <- numTotalVar + nrow(hardy)
+  hardy <- filter(hardy, HOM_A1_CT <= 2 | TWO_AX_CT <= 2) %>%
+    rowwise() %>%
+    mutate(MAF = calcMAF(`HOM_A1_CT`, `HET_A1_CT`, `TWO_AX_CT`)) %>%
+    mutate(carryF = calcCarrier(`HOM_A1_CT`, `HET_A1_CT`, `TWO_AX_CT`)) %>%
+    ungroup() %>%
+    filter(MAF <= 0.17 & carryF <= 0.25 & MAF >= 0.05)
+
+  susLethal <- bind_rows(susLethal, hardy)
+  rm(hardy)
 }
 
-susLethal <- mutate(susLethal, P = p.adjust(P, method = "BY")) %>% 
-    filter(P < 0.05)
+susLethal <- mutate(susLethal, P = p.adjust(P, method = "BY")) %>%
+  filter(P < 0.05)
 write_csv(susLethal, "../data/susLethal.csv")
 
 numLethal <- nrow(susLethal)
@@ -156,9 +156,9 @@ Variants that appeared in both the impact screening and the recessive lethal scr
 ```{r crossReference}
 # Merge the datasets to find high impact variants with missing homozygosity
 ## VEP marks all variant BP, while Plink only marks the first. Truncate to standardize
-highImpact <- extract(highImpact, col = BP, into = "BP", regex = "(^[0-9]+)", convert = TRUE) %>% 
-    select(CHR, BP, Gene, Consequence) %>% 
-    distinct()
+highImpact <- extract(highImpact, col = BP, into = "BP", regex = "(^[0-9]+)", convert = TRUE) %>%
+  select(CHR, BP, Gene, Consequence) %>%
+  distinct()
 
 candidates <- inner_join(highImpact, susLethal, by = c("CHR", "BP"))
 write_csv(candidates, "../data/candidates.csv")

@@ -1,4 +1,5 @@
 library(tidyverse)
+library(data.table)
 
 gwasData <- read_table2("data/DM_GENO1_MAF05.hwe")
 arrayManifest <- read_csv("data/arrayManifest.csv")
@@ -40,9 +41,6 @@ females <- filter(AMO687, sex == 2)$dog
 # ---- Sex Differences on WGS Data ----
 
 # Get phenotype information
-sampleInfo <- fread("data/sample_info.csv") %>% 
-    mutate(isWolf = BreedGroup == "Wolf") %>% 
-    #select(-BreedGroup)
 
 
 ppp2cb_lethal <- read_csv("ppp2cb_lethal.csv") %>% 
@@ -151,7 +149,14 @@ read_vcf <- function(filename) {
         as_tibble(rownames = "SampleId")
 }
 
-sampleInfo <- fread("data/full_pheno.csv")
+sampleInfo <- read_csv("data/810data/813DBVDCmeta.csv")
+goi <- read_vcf("data/810data/geneVCFs/OR2T11.vcf") %>% 
+    inner_join(sampleInfo) %>% 
+    filter(!is.na(Sex)) %>% 
+    select(SampleId, "14:2695515", Sex)
+
+table(goi[[2]], goi$Sex)
+
 overlapCandidates <- read_csv("overlapCandidates.csv")
 
 voi <- filter(overlapCandidates, Gene == "ENSCAFG00000006025" | Gene == "ENSCAFG00000049994" | 

@@ -21,33 +21,33 @@ The following script outputs counts for different subsets of input data. In the 
 
 ```{r}
 # Load the candidate variant data
-candidates <- read_csv("../data/810data/candidates.csv") %>% 
-    rename(GeneID = Gene)
+candidates <- read_csv("../data/810data/candidates.csv") %>%
+  rename(GeneID = Gene)
 
 # Build a BioMart query to get information on the genes in the dataset
 ensembl <- useEnsembl(biomart = "ensembl", dataset = "clfamiliaris_gene_ensembl")
-ensemblGenes <- getBM(filters= "ensembl_gene_id", attributes= c("ensembl_gene_id", "external_gene_name", "chromosome_name", "start_position", "end_position", "description"), values = candidates$GeneID, mart = ensembl)
+ensemblGenes <- getBM(filters = "ensembl_gene_id", attributes = c("ensembl_gene_id", "external_gene_name", "chromosome_name", "start_position", "end_position", "description"), values = candidates$GeneID, mart = ensembl)
 colnames(ensemblGenes) <- c("GeneID", "Gene", "CHR", "bpStart", "bpEnd", "Description")
 
 # Merge the Ensembl gene data in with the variants
 candidates <- inner_join(candidates, ensemblGenes)
 
 calcCounts <- function(variants) {
-    # Calculate counts of variant numbers and genes per dataset and chromosome
-    print(paste("There are", nrow(variants), "total variants in this dataset.", sum(str_detect(variants$Consequence, "missense")), "of these variants are predicted damaging missense mutations."))
-    print(paste("There are", length(unique(variants$GeneID)), "total genes in this dataset."))
-    
-    variants %>% 
-        dplyr::select(CHR, GeneID, Gene:bpEnd) %>% 
-        add_count(CHR, name = "CHRNumVar") %>% 
-        add_count(GeneID, name = "GeneNumVar") %>% 
-        distinct() %>% 
-        arrange(CHR) %>% 
-        paged_table()
+  # Calculate counts of variant numbers and genes per dataset and chromosome
+  print(paste("There are", nrow(variants), "total variants in this dataset.", sum(str_detect(variants$Consequence, "missense")), "of these variants are predicted damaging missense mutations."))
+  print(paste("There are", length(unique(variants$GeneID)), "total genes in this dataset."))
+
+  variants %>%
+    dplyr::select(CHR, GeneID, Gene:bpEnd) %>%
+    add_count(CHR, name = "CHRNumVar") %>%
+    add_count(GeneID, name = "GeneNumVar") %>%
+    distinct() %>%
+    arrange(CHR) %>%
+    paged_table()
 }
 
 write_csv(candidates, "../data/810data/ensemblCandidateData.csv")
-#candidates <- read_csv("../data/810data/ensemblCandidateData.csv")
+# candidates <- read_csv("../data/810data/ensemblCandidateData.csv")
 ```
 
 The counts for all candidates are below. These are defined as genes with significantly missing homozygosity and predicted damaging mutations.
@@ -65,27 +65,27 @@ The candidate genes must be checked for sequencing issues, as previous investiga
 candidates <- mutate(candidates, geneName = case_when(Gene != "" ~ Gene, TRUE ~ GeneID))
 
 # Make VCF extract file
-candidates %>% 
-    dplyr::select(geneName, CHR, bpStart, bpEnd) %>% 
-    distinct() %>% 
-    write_tsv("Gene_extract.txt", col_names = FALSE)
+candidates %>%
+  dplyr::select(geneName, CHR, bpStart, bpEnd) %>%
+  distinct() %>%
+  write_tsv("Gene_extract.txt", col_names = FALSE)
 
 # Make BAM extract file
-candidates %>% 
-    mutate(genCoord = paste0(CHR, ":", bpStart - 500, "-", bpEnd + 500)) %>% 
-    filter(Gene != "") %>% 
-    dplyr::select(geneName, genCoord) %>% 
-    distinct() %>% 
-    write_tsv("bamExtract.txt", col_names = FALSE)
+candidates %>%
+  mutate(genCoord = paste0(CHR, ":", bpStart - 500, "-", bpEnd + 500)) %>%
+  filter(Gene != "") %>%
+  dplyr::select(geneName, genCoord) %>%
+  distinct() %>%
+  write_tsv("bamExtract.txt", col_names = FALSE)
 
 # Record variants for easier sample selection
-candidates %>% 
-    arrange(CHR, BP) %>% 
-    filter(Gene != "") %>% 
-    mutate(variant = paste0(CHR, ":", BP, A1, ">", AX)) %>% 
-    select(Gene, variant) %>% 
-    distinct() %>% 
-    paged_table()
+candidates %>%
+  arrange(CHR, BP) %>%
+  filter(Gene != "") %>%
+  mutate(variant = paste0(CHR, ":", BP, A1, ">", AX)) %>%
+  dplyr::select(Gene, variant) %>%
+  distinct() %>%
+  paged_table()
 ```
 
 The above table compactly states the genes and variants of interest, for easier importing into a note taking application.
